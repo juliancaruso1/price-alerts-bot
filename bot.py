@@ -7,12 +7,18 @@ Comandos:
   /alerta <activo> <op> <valor>   -> crea una alerta. Ej: /alerta blue < 1200
   /misalertas                     -> lista tus alertas activas
   /cancelar <id>                  -> desactiva una alerta
+  /premium                        -> muestra tu estado y cómo pasar a premium
+  /miid                           -> muestra tu chat_id (útil para soporte/activación)
+  /activar_premium <chat_id> <dias>  -> (solo admin) activa premium a un usuario
 
 Activos soportados hoy:
   Dólar: oficial, blue, bolsa, contadoconliqui, tarjeta, mayorista
   Cripto: bitcoin, ethereum (fácil de agregar más en CRYPTO_ASSETS)
 
-Requiere variable de entorno TELEGRAM_BOT_TOKEN (ver README.md).
+Requiere variables de entorno (ver README.md):
+  TELEGRAM_BOT_TOKEN  -> token del bot
+  ADMIN_CHAT_ID        -> tu chat_id, para poder usar /activar_premium
+  PAYMENT_LINK          -> (opcional) link de pago de Mercado Pago
 """
 import asyncio
 import logging
@@ -21,7 +27,17 @@ import os
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from alerts import init_db, add_alert, list_alerts, deactivate_alert, get_all_active_alerts, alert_is_triggered
+from alerts import (
+    init_db,
+    add_alert,
+    list_alerts,
+    deactivate_alert,
+    get_all_active_alerts,
+    alert_is_triggered,
+    count_active_alerts,
+    is_premium,
+    set_premium,
+)
 from price_fetcher import get_dolar_prices, get_crypto_prices
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -29,6 +45,8 @@ logger = logging.getLogger(__name__)
 
 CRYPTO_ASSETS = {"bitcoin", "ethereum"}
 CHECK_INTERVAL_SECONDS = 300  # cada 5 minutos
+FREE_ALERT_LIMIT = 2
+PAYMENT_LINK = os.environ.get("PAYMENT_LINK", "(todavía no configuraste tu link de pago)")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -37,8 +55,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Comandos disponibles:\n"
         "/alerta <activo> <op> <valor> - Crea una alerta. Ej: /alerta blue < 1200\n"
         "/misalertas - Lista tus alertas activas\n"
-        "/cancelar <id> - Cancela una alerta\n\n"
-        "Activos disponibles: oficial, blue, bolsa, contadoconliqui, tarjeta, mayorista, bitcoin, ethereum"
+        "/cancelar <id> - Cancela una alerta\n"
+        "/premium - Ver tu estado y cómo tener alertas ilimitadas\n\n"
+        f"Activos disponibles: oficial, blue, bolsa, contadoconliqui, tarjeta, mayorista, bitcoin, ethereum\n\n"
+        f"Plan gratis: hasta {FREE_ALERT_LIMIT} alertas activas."
     )
 
 
@@ -63,6 +83,18 @@ async def crear_alerta(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except ValueError:
         await update.message.reply_text("El valor debe ser un número, ej: 1200")
         return
+
+    # Aplicar límite de alertas gratis (si el usuario no es premium)
+    if not is_premium(chat_id):
+        current_count = count_active_alerts(chat_id)
+        if current_count >= FREE_ALERT_LIMIT:
+            await update.message.reply_text(
+                f"⚠️ Llegaste al límite de {FREE_ALERT_LIMIT} alertas del plan gratis.\n\n"
+                "Para tener alertas ilimitadas, pasate a premium:\n"
+                f"{PAYMENT_LINK}\n\n"
+                "Una vez que pagues, escribime para activar tu cuenta. Usá /premium para más info."
+            )
+            return
 
     alert_id = add_alert(chat_id, asset, operator, target_value)
     await update.message.reply_text(
@@ -91,6 +123,56 @@ async def cancelar_alerta(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     alert_id = int(args[0])
     deactivate_alert(alert_id)
     await update.message.reply_text(f"Alerta #{alert_id} cancelada.")
+
+
+async def premium_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+
+    if is_premium(chat_id):
+        await update.message.reply_text("✅ Ya sos usuario premium. Tenés alertas ilimitadas.")
+        return
+
+    current_count = count_active_alerts(chat_id)
+    await update.message.reply_text(
+        f"Estás en el plan gratis: {current_count}/{FREE_ALERT_LIMIT} alertas usadas.\n\n"
+        "Para tener alertas ilimitadas, pasate a premium acá:\n"
+        f"{PAYMENT_LINK}\n\n"
+        "Una vez que pagues, avisá para activar tu cuenta (mandá /miid y compartí ese número)."
+    )
+
+
+async def mi_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    await update.message.reply_text(
+        f"Tu chat_id es: {chat_id}\n\nCompartilo si necesitás soporte o activar premium."
+    )
+
+
+async def activar_premium(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Comando de administrador: activa premium a un usuario por su chat_id."""
+    sender_chat_id = str(update.effective_chat.id)
+    admin_chat_id = os.environ.get("ADMIN_CHAT_ID")
+
+    if not admin_chat_id or sender_chat_id != admin_chat_id:
+        await update.message.reply_text("No tenés permiso para usar este comando.")
+        return
+
+    args = context.args
+    if len(args) != 1 or not args[0].lstrip("-").isdigit():
+        await update.message.reply_text("Uso correcto: /activar_premium <chat_id>")
+        return
+
+    target_chat_id = int(args[0])
+    set_premium(target_chat_id, True)
+    await update.message.reply_text(f"✅ Usuario {target_chat_id} activado como premium.")
+
+    try:
+        await context.bot.send_message(
+            chat_id=target_chat_id,
+            text="🎉 ¡Tu cuenta premium fue activada! Ya tenés alertas ilimitadas.",
+        )
+    except Exception as e:
+        logger.warning(f"No se pudo avisar al usuario {target_chat_id}: {e}")
 
 
 async def check_alerts_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -157,6 +239,9 @@ def main() -> None:
     application.add_handler(CommandHandler("alerta", crear_alerta))
     application.add_handler(CommandHandler("misalertas", mis_alertas))
     application.add_handler(CommandHandler("cancelar", cancelar_alerta))
+    application.add_handler(CommandHandler("premium", premium_info))
+    application.add_handler(CommandHandler("miid", mi_id))
+    application.add_handler(CommandHandler("activar_premium", activar_premium))
 
     # Chequeo periódico de alertas
     application.job_queue.run_repeating(check_alerts_job, interval=CHECK_INTERVAL_SECONDS, first=10)

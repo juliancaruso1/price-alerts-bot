@@ -25,7 +25,7 @@ class Alert:
 
 
 def init_db(db_path: str = DB_PATH) -> None:
-    """Crea la tabla de alertas si no existe."""
+    """Crea las tablas si no existen: alertas y usuarios (premium)."""
     conn = sqlite3.connect(db_path)
     conn.execute(
         """
@@ -36,6 +36,14 @@ def init_db(db_path: str = DB_PATH) -> None:
             operator TEXT NOT NULL,
             target_value REAL NOT NULL,
             active INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            chat_id INTEGER PRIMARY KEY,
+            is_premium INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -84,6 +92,38 @@ def deactivate_alert(alert_id: int, db_path: str = DB_PATH) -> None:
     """Marca una alerta como inactiva (ya se cumplió o el usuario la borró)."""
     conn = sqlite3.connect(db_path)
     conn.execute("UPDATE alerts SET active = 0 WHERE id = ?", (alert_id,))
+    conn.commit()
+    conn.close()
+
+
+def count_active_alerts(chat_id: int, db_path: str = DB_PATH) -> int:
+    """Cuenta cuántas alertas activas tiene un usuario (para aplicar el límite gratis)."""
+    conn = sqlite3.connect(db_path)
+    row = conn.execute(
+        "SELECT COUNT(*) FROM alerts WHERE chat_id = ? AND active = 1", (chat_id,)
+    ).fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+
+def is_premium(chat_id: int, db_path: str = DB_PATH) -> bool:
+    """Devuelve True si el usuario tiene estado premium activo."""
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT is_premium FROM users WHERE chat_id = ?", (chat_id,)).fetchone()
+    conn.close()
+    return bool(row[0]) if row else False
+
+
+def set_premium(chat_id: int, is_premium_value: bool, db_path: str = DB_PATH) -> None:
+    """Activa o desactiva el estado premium de un usuario (usado por el comando de admin)."""
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO users (chat_id, is_premium) VALUES (?, ?)
+        ON CONFLICT(chat_id) DO UPDATE SET is_premium = excluded.is_premium
+        """,
+        (chat_id, int(is_premium_value)),
+    )
     conn.commit()
     conn.close()
 

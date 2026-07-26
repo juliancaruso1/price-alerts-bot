@@ -15,6 +15,9 @@ from alerts import (
     deactivate_alert,
     alert_is_triggered,
     Alert,
+    count_active_alerts,
+    is_premium,
+    set_premium,
 )
 
 
@@ -74,3 +77,25 @@ def test_get_all_active_alerts_across_users(temp_db):
 def test_alert_is_triggered(operator, target, current, expected):
     alert = Alert(id=1, chat_id=123, asset="test", operator=operator, target_value=target, active=True)
     assert alert_is_triggered(alert, current) == expected
+
+
+def test_count_active_alerts(temp_db):
+    add_alert(chat_id=123, asset="blue", operator="<", target_value=1200, db_path=temp_db)
+    add_alert(chat_id=123, asset="bitcoin", operator=">", target_value=60000, db_path=temp_db)
+    add_alert(chat_id=999, asset="blue", operator="<", target_value=1000, db_path=temp_db)
+
+    assert count_active_alerts(123, db_path=temp_db) == 2
+    assert count_active_alerts(999, db_path=temp_db) == 1
+    assert count_active_alerts(555, db_path=temp_db) == 0
+
+
+def test_is_premium_defaults_to_false(temp_db):
+    assert is_premium(123, db_path=temp_db) is False
+
+
+def test_set_premium_and_check(temp_db):
+    set_premium(123, True, db_path=temp_db)
+    assert is_premium(123, db_path=temp_db) is True
+
+    set_premium(123, False, db_path=temp_db)
+    assert is_premium(123, db_path=temp_db) is False
