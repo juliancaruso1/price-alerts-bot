@@ -3,10 +3,15 @@ alerts.py
 Gestión de alertas de usuarios: creación, listado, y evaluación contra precios actuales.
 Persistencia simple con SQLite (un solo archivo, sin necesidad de instalar servidor de BD).
 """
+import os
 import sqlite3
 from dataclasses import dataclass
 
-DB_PATH = "alerts.db"
+# Si existe un volumen persistente montado (ej: en Railway en /data),
+# la base de datos se guarda ahí para no perderse entre despliegues.
+# En tu compu local, como no existe /data, usa simplemente "alerts.db".
+_DATA_DIR = "/data" if os.path.isdir("/data") else "."
+DB_PATH = os.path.join(_DATA_DIR, "alerts.db")
 
 
 @dataclass
